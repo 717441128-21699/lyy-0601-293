@@ -16,7 +16,7 @@ type ExportScope = 'all' | 'range' | 'settlement';
 
 export default function ExportPage() {
   const navigate = useNavigate();
-  const { currentTrip, tripMembers, tripBills, memberMap, totalExpense, transfers } = useCurrentTrip();
+  const { currentTrip, tripMembers, tripBills, memberMap, totalExpense, transfers, tripSettlements } = useCurrentTrip();
   const { trips, currentTripId, members, bills, advancePayments, settlements, importData } = useStore();
   const exportRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
@@ -62,6 +62,30 @@ export default function ExportPage() {
     if (exportScope === 'range') return filteredBillsForExport.length > 0 && rangeStart && rangeEnd;
     return filteredBillsForExport.length > 0;
   }, [exportScope, filteredBillsForExport, rangeStart, rangeEnd, transfers]);
+
+  const { settledTransfers, pendingTransfers, pendingTotal, settledTotal } = useMemo(() => {
+    const settled: typeof transfers = [];
+    const pending: typeof transfers = [];
+    transfers.forEach((t) => {
+      const s = tripSettlements.find(
+        (x) =>
+          x.fromMemberId === t.fromMemberId &&
+          x.toMemberId === t.toMemberId &&
+          Math.abs(x.amount - t.amount) < 0.01
+      );
+      const fullyConfirmed = !!s?.fromConfirmed && !!s?.toConfirmed && !!s?.settled;
+      if (fullyConfirmed) settled.push(t);
+      else pending.push(t);
+    });
+    return {
+      settledTransfers: settled,
+      pendingTransfers: pending,
+      pendingTotal: pending.reduce((s, t) => s + t.amount, 0),
+      settledTotal: settled.reduce((s, t) => s + t.amount, 0),
+    };
+  }, [transfers, tripSettlements]);
+
+  const settlementDisplayTotal = exportScope === 'settlement' ? pendingTotal : totalExpense;
 
   const handleExportImage = async () => {
     if (!exportRef.current) return;
@@ -381,11 +405,17 @@ export default function ExportPage() {
             )}
             <div className="mt-4 inline-block">
               <div className="text-xs text-gray-400">
-                {exportScope === 'settlement' ? '待结算总额' : '消费总额'}
+                {exportScope === 'settlement' ? '待转账合计' : exportScope === 'all' ? '消费总额' : '筛选区间消费'}
               </div>
               <div className="text-3xl font-bold text-gray-900">
-                {formatMoney(exportScope === 'all' ? totalExpense : filteredTotal)}
+                {formatMoney(exportScope === 'settlement' ? settlementDisplayTotal : (exportScope === 'all' ? totalExpense : filteredTotal))}
               </div>
+              {exportScope === 'settlement' && (
+                <div className="flex gap-4 justify-center mt-2 text-xs">
+                  <span className="text-emerald-600">已结清 {formatMoney(settledTotal)}</span>
+                  <span className="text-amber-600">待确认 {formatMoney(pendingTotal)}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -507,37 +537,84 @@ export default function ExportPage() {
                   ✅ 已全部结清，无需转账
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {transfers.map((t, i) => {
-                    const from = memberMap[t.fromMemberId];
-                    const to = memberMap[t.toMemberId];
-                    return (
-                      <div key={i} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <div
-                            className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0"
-                            style={{ backgroundColor: from?.color }}
-                          >
-                            {from?.name.charAt(0)}
-                          </div>
-                          <span className="text-sm text-gray-700 font-medium">{from?.name}</span>
-                        </div>
-                        <span className="text-sm font-bold text-primary-600 px-2">
-                          → {formatMoney(t.amount)} →
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-700 font-medium">{to?.name}</span>
-                          <div
-                            className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0"
-                            style={{ backgroundColor: to?.color }}
-                          >
-                            {to?.name.charAt(0)}
-                          </div>
-                        </div>
+                <>
+                  {pendingTransfers.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-xs text-amber-600 font-medium mb-2 flex items-center gap-1">
+                        ⏳ 待确认/待转账 ({pendingTransfers.length}笔，共{formatMoney(pendingTotal)})
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="space-y-2">
+                        {pendingTransfers.map((t, i) => {
+                          const from = memberMap[t.fromMemberId];
+                          const to = memberMap[t.toMemberId];
+                          return (
+                            <div key={`p-${i}`} className="flex items-center justify-between py-2 px-3 bg-amber-50 rounded-lg border border-amber-100">
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0"
+                                  style={{ backgroundColor: from?.color }}
+                                >
+                                  {from?.name.charAt(0)}
+                                </div>
+                                <span className="text-sm text-gray-700 font-medium">{from?.name}</span>
+                              </div>
+                              <span className="text-sm font-bold text-amber-600 px-2">
+                                → {formatMoney(t.amount)} →
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-gray-700 font-medium">{to?.name}</span>
+                                <div
+                                  className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0"
+                                  style={{ backgroundColor: to?.color }}
+                                >
+                                  {to?.name.charAt(0)}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {settledTransfers.length > 0 && (
+                    <div>
+                      <div className="text-xs text-emerald-600 font-medium mb-2 flex items-center gap-1">
+                        ✅ 已双方确认结清 ({settledTransfers.length}笔，共{formatMoney(settledTotal)})
+                      </div>
+                      <div className="space-y-2">
+                        {settledTransfers.map((t, i) => {
+                          const from = memberMap[t.fromMemberId];
+                          const to = memberMap[t.toMemberId];
+                          return (
+                            <div key={`s-${i}`} className="flex items-center justify-between py-2 px-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0 opacity-60"
+                                  style={{ backgroundColor: from?.color }}
+                                >
+                                  {from?.name.charAt(0)}
+                                </div>
+                                <span className="text-sm text-gray-500 font-medium line-through">{from?.name}</span>
+                              </div>
+                              <span className="text-sm font-bold text-emerald-600 px-2 line-through">
+                                → {formatMoney(t.amount)} →
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-gray-500 font-medium line-through">{to?.name}</span>
+                                <div
+                                  className="w-6 h-6 rounded-full text-white text-xs flex items-center justify-center font-bold shrink-0 opacity-60"
+                                  style={{ backgroundColor: to?.color }}
+                                >
+                                  {to?.name.charAt(0)}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

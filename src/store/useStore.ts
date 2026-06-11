@@ -11,6 +11,7 @@ interface AppState {
   bills: Bill[];
   advancePayments: AdvancePayment[];
   settlements: Settlement[];
+  _undoBills?: Bill[];
 
   setCurrentTrip: (tripId: string | null) => void;
 
@@ -25,11 +26,16 @@ interface AppState {
   addBill: (data: Omit<Bill, 'id' | 'createdAt'>) => void;
   updateBill: (id: string, data: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
+  deleteBills: (ids: string[]) => void;
+  updateBillsCategory: (ids: string[], category: Bill['category']) => void;
+  undoLastDelete: () => boolean;
 
   addAdvancePayment: (data: Omit<AdvancePayment, 'id' | 'createdAt'>) => void;
   deleteAdvancePayment: (id: string) => void;
 
   markSettlement: (fromMemberId: string, toMemberId: string, amount: number, settled: boolean) => void;
+  confirmSettlement: (fromMemberId: string, toMemberId: string, amount: number, confirmerId: string) => void;
+  unconfirmSettlement: (fromMemberId: string, toMemberId: string, amount: number, confirmerId: string) => void;
 
   importData: (data: Partial<AppState>) => void;
   clearAllData: () => void;
@@ -126,9 +132,39 @@ export const useStore = create<AppState>()(
       },
 
       deleteBill: (id) => {
+        set((state) => {
+          const target = state.bills.find((b) => b.id === id);
+          return {
+            bills: state.bills.filter((b) => b.id !== id),
+            _undoBills: target ? [target] : state._undoBills,
+          };
+        });
+      },
+
+      deleteBills: (ids) => {
+        set((state) => {
+          const targets = state.bills.filter((b) => ids.includes(b.id));
+          return {
+            bills: state.bills.filter((b) => !ids.includes(b.id)),
+            _undoBills: targets.length > 0 ? targets : state._undoBills,
+          };
+        });
+      },
+
+      updateBillsCategory: (ids, category) => {
         set((state) => ({
-          bills: state.bills.filter((b) => b.id !== id),
+          bills: state.bills.map((b) => (ids.includes(b.id) ? { ...b, category } : b)),
         }));
+      },
+
+      undoLastDelete: () => {
+        const state = get();
+        if (!state._undoBills || state._undoBills.length === 0) return false;
+        set({
+          bills: [...state.bills, ...state._undoBills],
+          _undoBills: undefined,
+        });
+        return true;
       },
 
       addAdvancePayment: (data) => {
@@ -162,7 +198,15 @@ export const useStore = create<AppState>()(
         if (existing) {
           set((state) => ({
             settlements: state.settlements.map((s) =>
-              s.id === existing.id ? { ...s, settled, settledAt: settled ? new Date().toISOString() : undefined } : s
+              s.id === existing.id
+                ? {
+                    ...s,
+                    settled,
+                    settledAt: settled ? new Date().toISOString() : undefined,
+                    fromConfirmed: settled ? s.fromConfirmed : undefined,
+                    toConfirmed: settled ? s.toConfirmed : undefined,
+                  }
+                : s
             ),
           }));
         } else if (settled) {
@@ -179,6 +223,79 @@ export const useStore = create<AppState>()(
             settlements: [...state.settlements, newSettlement],
           }));
         }
+      },
+
+      confirmSettlement: (fromMemberId, toMemberId, amount, confirmerId) => {
+        const state = get();
+        const tripId = state.currentTripId;
+        if (!tripId) return;
+        const now = new Date().toISOString();
+        let existing = state.settlements.find(
+          (s) =>
+            s.tripId === tripId &&
+            s.fromMemberId === fromMemberId &&
+            s.toMemberId === toMemberId &&
+            Math.abs(s.amount - amount) < 0.01
+        );
+        if (!existing) {
+          const newSettlement: Settlement = {
+            id: generateId(),
+            tripId,
+            fromMemberId,
+            toMemberId,
+            amount,
+            settled: false,
+          };
+          set((state) => ({
+            settlements: [...state.settlements, newSettlement],
+          }));
+          existing = newSettlement;
+        }
+        set((state) => ({
+          settlements: state.settlements.map((s) => {
+            if (s.id !== existing!.id) return s;
+            const isFrom = confirmerId === s.fromMemberId;
+            const isTo = confirmerId === s.toMemberId;
+            const fromConfirmed = isFrom ? { memberId: confirmerId, confirmedAt: now } : s.fromConfirmed;
+            const toConfirmed = isTo ? { memberId: confirmerId, confirmedAt: now } : s.toConfirmed;
+            const bothConfirmed = !!fromConfirmed && !!toConfirmed;
+            return {
+              ...s,
+              fromConfirmed,
+              toConfirmed,
+              settled: bothConfirmed ? true : s.settled,
+              settledAt: bothConfirmed ? now : s.settledAt,
+            };
+          }),
+        }));
+      },
+
+      unconfirmSettlement: (fromMemberId, toMemberId, amount, confirmerId) => {
+        const state = get();
+        const tripId = state.currentTripId;
+        if (!tripId) return;
+        const existing = state.settlements.find(
+          (s) =>
+            s.tripId === tripId &&
+            s.fromMemberId === fromMemberId &&
+            s.toMemberId === toMemberId &&
+            Math.abs(s.amount - amount) < 0.01
+        );
+        if (!existing) return;
+        set((state) => ({
+          settlements: state.settlements.map((s) => {
+            if (s.id !== existing.id) return s;
+            const isFrom = confirmerId === s.fromMemberId;
+            const isTo = confirmerId === s.toMemberId;
+            return {
+              ...s,
+              fromConfirmed: isFrom ? undefined : s.fromConfirmed,
+              toConfirmed: isTo ? undefined : s.toConfirmed,
+              settled: false,
+              settledAt: undefined,
+            };
+          }),
+        }));
       },
 
       importData: (data) => {

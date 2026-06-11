@@ -50,6 +50,11 @@ export interface Bill {
   participants: BillParticipant[];
 }
 
+export interface SettlementConfirmation {
+  memberId: string;
+  confirmedAt: string;
+}
+
 export interface Settlement {
   id: string;
   tripId: string;
@@ -58,6 +63,8 @@ export interface Settlement {
   amount: number;
   settled: boolean;
   settledAt?: string;
+  fromConfirmed?: SettlementConfirmation;
+  toConfirmed?: SettlementConfirmation;
 }
 
 export interface Transfer {

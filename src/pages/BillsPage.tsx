@@ -1,6 +1,21 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Receipt, Trash2, ArrowRight, Calendar as CalendarIcon, Check, Edit3, AlertCircle } from 'lucide-react';
+import {
+  Plus,
+  Receipt,
+  Trash2,
+  ArrowRight,
+  Calendar as CalendarIcon,
+  Check,
+  Edit3,
+  AlertCircle,
+  CheckSquare,
+  Square,
+  Undo2,
+  Tag,
+  X,
+  Image as ImageIcon,
+} from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
@@ -40,33 +55,48 @@ const emptyForm: FormState = {
 export default function BillsPage() {
   const navigate = useNavigate();
   const { currentTrip, tripMembers, tripBills, memberMap } = useCurrentTrip();
-  const { addBill, updateBill, deleteBill } = useStore();
+  const { addBill, updateBill, deleteBill, deleteBills, updateBillsCategory, undoLastDelete } = useStore();
   const [showModal, setShowModal] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [dateFilter, setDateFilter] = useState<string>('');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [validationError, setValidationError] = useState<string>('');
 
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchCategory, setBatchCategory] = useState<BillCategory>('food');
+  const [undoToast, setUndoToast] = useState(false);
+  const [undoCount, setUndoCount] = useState(0);
+
+  const filteredBills = useMemo(
+    () => (dateFilter ? tripBills.filter((b) => b.date === dateFilter) : tripBills),
+    [tripBills, dateFilter]
+  );
+
   const groupedBills = useMemo(() => {
-    const filtered = dateFilter ? tripBills.filter((b) => b.date === dateFilter) : tripBills;
     const groups: Record<string, Bill[]> = {};
-    filtered.forEach((bill) => {
+    filteredBills.forEach((bill) => {
       if (!groups[bill.date]) groups[bill.date] = [];
       groups[bill.date].push(bill);
     });
     const dates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
     return dates.map((date) => ({ date, bills: groups[date] }));
-  }, [tripBills, dateFilter]);
+  }, [filteredBills]);
 
   const totalFiltered = useMemo(
-    () => (dateFilter ? tripBills.filter((b) => b.date === dateFilter) : tripBills)
-      .reduce((sum, b) => sum + b.amount, 0),
-    [tripBills, dateFilter]
+    () => filteredBills.reduce((sum, b) => sum + b.amount, 0),
+    [filteredBills]
   );
 
   const allDates = useMemo(() => {
     const set = new Set(tripBills.map((b) => b.date));
     return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [tripBills]);
+
+  const allCategories = useMemo(() => {
+    const set = new Set(tripBills.map((b) => b.category));
+    return Array.from(set);
   }, [tripBills]);
 
   const previewShares = useMemo(() => {
@@ -91,6 +121,93 @@ export default function BillsPage() {
       participants,
     });
   }, [form]);
+
+  useEffect(() => {
+    if (!showModal) return;
+    if (!form.amount || form.participantIds.length === 0) {
+      setValidationError('');
+      return;
+    }
+    const amount = round2(Number(form.amount));
+    const participantsForValidation = form.participantIds.map((mid) => ({
+      memberId: mid,
+      ratio: Number(form.weights[mid]) || 0,
+      fixedAmount: Number(form.fixedAmounts[mid]) || 0,
+      weight: Number(form.weights[mid]) || 0,
+    }));
+    const validation = validateSplit(form.splitType, amount, participantsForValidation);
+    if (!validation.valid) {
+      setValidationError(validation.message || '分摊金额校验失败');
+    } else {
+      setValidationError('');
+    }
+  }, [form.amount, form.splitType, form.fixedAmounts, form.weights, form.participantIds, showModal]);
+
+  const selectedBills = useMemo(
+    () => tripBills.filter((b) => selectedIds.has(b.id)),
+    [tripBills, selectedIds]
+  );
+  const selectedTotal = selectedBills.reduce((s, b) => s + b.amount, 0);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectDate = (date: string) => {
+    const dateBillIds = filteredBills.filter((b) => b.date === date).map((b) => b.id);
+    const allSelected = dateBillIds.every((id) => selectedIds.has(id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        dateBillIds.forEach((id) => next.delete(id));
+      } else {
+        dateBillIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredBills.length && filteredBills.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredBills.map((b) => b.id)));
+    }
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`确定删除选中的 ${selectedIds.size} 笔账单吗？`)) return;
+    deleteBills(Array.from(selectedIds));
+    setUndoCount(selectedIds.size);
+    setUndoToast(true);
+    setTimeout(() => setUndoToast(false), 3500);
+    exitSelectMode();
+  };
+
+  const handleBatchChangeCategory = () => {
+    if (selectedIds.size === 0) return;
+    updateBillsCategory(Array.from(selectedIds), batchCategory);
+    setShowBatchModal(false);
+    exitSelectMode();
+  };
+
+  const handleUndo = () => {
+    const ok = undoLastDelete();
+    if (ok) {
+      setUndoToast(false);
+    }
+  };
 
   const handleOpenAddModal = () => {
     setEditingBill(null);
@@ -239,48 +356,122 @@ export default function BillsPage() {
   return (
     <>
       <PageLayout
-        title="账单记录"
+        title={selectMode ? `已选 ${selectedIds.size} 笔` : '账单记录'}
         rightAction={
-          <button
-            onClick={handleOpenAddModal}
-            disabled={tripMembers.length === 0}
-            className="w-10 h-10 rounded-full bg-primary-500 text-white flex items-center justify-center shadow-lg shadow-primary-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
-          >
-            <Plus className="w-5 h-5" />
-          </button>
+          selectMode ? (
+            <button
+              onClick={exitSelectMode}
+              className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          ) : (
+            <button
+              onClick={handleOpenAddModal}
+              disabled={tripMembers.length === 0}
+              className="w-10 h-10 rounded-full bg-primary-500 text-white flex items-center justify-center shadow-lg shadow-primary-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
+            >
+              <Plus className="w-5 h-5" />
+            </button>
+          )
+        }
+        leftAction={
+          tripBills.length > 0 && !selectMode ? (
+            <button
+              onClick={() => setSelectMode(true)}
+              className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center active:scale-95 transition-transform"
+            >
+              <CheckSquare className="w-5 h-5" />
+            </button>
+          ) : undefined
         }
         headerExtra={
-          allDates.length > 0 && (
-            <div className="px-4 pb-3 overflow-x-auto no-scrollbar">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setDateFilter('')}
-                  className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${
-                    dateFilter === ''
-                      ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
-                      : 'bg-white text-gray-600 border border-gray-200'
-                  }`}
-                >
-                  全部
-                </button>
-                {allDates.map((d) => (
+          <>
+            {allDates.length > 0 && (
+              <div className="px-4 pb-3 overflow-x-auto no-scrollbar">
+                <div className="flex gap-2">
                   <button
-                    key={d}
-                    onClick={() => setDateFilter(d)}
+                    onClick={() => setDateFilter('')}
                     className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${
-                      dateFilter === d
+                      dateFilter === ''
                         ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
                         : 'bg-white text-gray-600 border border-gray-200'
                     }`}
                   >
-                    {formatDateCN(d)}
+                    全部
                   </button>
-                ))}
+                  {allDates.map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setDateFilter(d)}
+                      className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${
+                        dateFilter === d
+                          ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
+                          : 'bg-white text-gray-600 border border-gray-200'
+                      }`}
+                    >
+                      {formatDateCN(d)}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )
+            )}
+            {selectMode && filteredBills.length > 0 && (
+              <div className="px-4 pb-3 flex items-center gap-3 bg-white/80 backdrop-blur">
+                <button
+                  onClick={toggleSelectAll}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-all ${
+                    selectedIds.size === filteredBills.length
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}
+                >
+                  {selectedIds.size === filteredBills.length ? (
+                    <CheckSquare className="w-4 h-4" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                  全选
+                </button>
+                <div className="text-sm text-gray-500 flex-1">
+                  合计 <span className="font-bold text-gray-800">{formatMoney(selectedTotal)}</span>
+                </div>
+                <button
+                  onClick={() => setShowBatchModal(true)}
+                  disabled={selectedIds.size === 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-primary-50 text-primary-600 disabled:opacity-50"
+                >
+                  <Tag className="w-4 h-4" />
+                  改分类
+                </button>
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={selectedIds.size === 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-red-50 text-red-500 disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  删除
+                </button>
+              </div>
+            )}
+          </>
         }
       >
+        {undoToast && (
+          <div className="mb-4 p-3 bg-gray-900 text-white rounded-xl shadow-lg flex items-center gap-3 animate-slide-up">
+            <div className="flex-1 text-sm">
+              已删除 {undoCount} 笔账单
+            </div>
+            <button
+              onClick={handleUndo}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary-500 text-white text-sm font-medium active:scale-95 transition-all"
+            >
+              <Undo2 className="w-4 h-4" />
+              撤回
+            </button>
+          </div>
+        )}
+
         {tripBills.length > 0 && (
           <div className="mb-4 p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
             <div className="flex items-center justify-between">
@@ -333,98 +524,137 @@ export default function BillsPage() {
           />
         ) : (
           <div className="space-y-5">
-            {groupedBills.map((group) => (
-              <div key={group.date}>
-                <div className="flex items-center gap-2 mb-2 px-1">
-                  <CalendarIcon className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm font-medium text-gray-600">
-                    {formatDateCN(group.date)}
-                  </span>
-                  <span className="ml-auto text-sm text-gray-500">
-                    {formatMoney(group.bills.reduce((s, b) => s + b.amount, 0))}
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {group.bills.map((bill) => {
-                    const payer = memberMap[bill.payerId];
-                    const shares = calculateBillShares(bill);
-                    return (
-                      <div
-                        key={bill.id}
-                        className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100"
+            {groupedBills.map((group) => {
+              const allSelected = group.bills.every((b) => selectedIds.has(b.id));
+              return (
+                <div key={group.date}>
+                  <div className="flex items-center gap-2 mb-2 px-1">
+                    {selectMode && (
+                      <button
+                        onClick={() => toggleSelectDate(group.date)}
+                        className="p-0.5"
                       >
-                        <div className="flex items-start gap-3">
-                          <CategoryIcon category={bill.category} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-gray-800">
-                                  {bill.note || CATEGORY_CONFIG[bill.category].label}
-                                </div>
-                                <div className="flex items-center gap-1.5 mt-1">
-                                  {payer && (
-                                    <MemberAvatar name={payer.name} color={payer.color} size="sm" />
-                                  )}
-                                  <span className="text-xs text-gray-500">
-                                    {payer?.name} 支付
-                                  </span>
-                                </div>
+                        {allSelected ? (
+                          <CheckSquare className="w-4 h-4 text-primary-500" />
+                        ) : (
+                          <Square className="w-4 h-4 text-gray-400" />
+                        )}
+                      </button>
+                    )}
+                    <CalendarIcon className="w-4 h-4 text-gray-400" />
+                    <span className="text-sm font-medium text-gray-600">
+                      {formatDateCN(group.date)}
+                    </span>
+                    <span className="ml-auto text-sm text-gray-500">
+                      {formatMoney(group.bills.reduce((s, b) => s + b.amount, 0))}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {group.bills.map((bill) => {
+                      const payer = memberMap[bill.payerId];
+                      const shares = calculateBillShares(bill);
+                      const selected = selectedIds.has(bill.id);
+                      return (
+                        <div
+                          key={bill.id}
+                          onClick={() => selectMode && toggleSelect(bill.id)}
+                          className={`bg-white rounded-2xl p-4 shadow-sm border transition-all ${
+                            selected
+                              ? 'border-primary-400 ring-2 ring-primary-200'
+                              : 'border-gray-100'
+                          } ${selectMode ? 'cursor-pointer' : ''}`}
+                        >
+                          <div className="flex items-start gap-3">
+                            {selectMode && (
+                              <div className="pt-0.5">
+                                {selected ? (
+                                  <CheckSquare className="w-5 h-5 text-primary-500" />
+                                ) : (
+                                  <Square className="w-5 h-5 text-gray-300" />
+                                )}
                               </div>
-                              <div className="text-right ml-2">
-                                <div className="text-lg font-bold text-gray-800">
-                                  {formatMoney(bill.amount)}
-                                </div>
-                                <div className="text-xs text-gray-400">
-                                  {SPLIT_TYPE_CONFIG[bill.splitType].label}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="mt-3 pt-3 border-t border-gray-50 flex flex-wrap gap-2">
-                              {bill.participants.map((p) => {
-                                const m = memberMap[p.memberId];
-                                if (!m) return null;
-                                return (
-                                  <div
-                                    key={p.id}
-                                    className="flex items-center gap-1 px-2 py-1 bg-gray-50 rounded-full text-xs"
-                                  >
-                                    <MemberAvatar name={m.name} color={m.color} size="sm" />
-                                    <span className="text-gray-600">{m.name}</span>
-                                    <span className="text-gray-800 font-medium">
-                                      {formatMoney(shares[m.id] || 0)}
+                            )}
+                            <CategoryIcon category={bill.category} />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-gray-800">
+                                    {bill.note || CATEGORY_CONFIG[bill.category].label}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    {payer && (
+                                      <MemberAvatar name={payer.name} color={payer.color} size="sm" />
+                                    )}
+                                    <span className="text-xs text-gray-500">
+                                      {payer?.name} 支付
                                     </span>
                                   </div>
-                                );
-                              })}
-                            </div>
-                            <div className="mt-3 pt-2 border-t border-gray-50 flex gap-2 justify-end">
-                              <button
-                                onClick={() => handleOpenEditModal(bill)}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-600 bg-primary-50 hover:bg-primary-100 transition-colors"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                                编辑
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (confirm('确定删除这笔账单吗？')) {
-                                    deleteBill(bill.id);
-                                  }
-                                }}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                删除
-                              </button>
+                                </div>
+                                <div className="text-right ml-2">
+                                  <div className="text-lg font-bold text-gray-800">
+                                    {formatMoney(bill.amount)}
+                                  </div>
+                                  <div className="text-xs text-gray-400">
+                                    {SPLIT_TYPE_CONFIG[bill.splitType].label}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3 pt-3 border-t border-gray-50 flex flex-wrap gap-2">
+                                {bill.participants.map((p) => {
+                                  const m = memberMap[p.memberId];
+                                  if (!m) return null;
+                                  return (
+                                    <div
+                                      key={p.id}
+                                      className="flex items-center gap-1 px-2 py-1 bg-gray-50 rounded-full text-xs"
+                                    >
+                                      <MemberAvatar name={m.name} color={m.color} size="sm" />
+                                      <span className="text-gray-600">{m.name}</span>
+                                      <span className="text-gray-800 font-medium">
+                                        {formatMoney(shares[m.id] || 0)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {!selectMode && (
+                                <div className="mt-3 pt-2 border-t border-gray-50 flex gap-2 justify-end">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenEditModal(bill);
+                                    }}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-600 bg-primary-50 hover:bg-primary-100 transition-colors"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    编辑
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (confirm('确定删除这笔账单吗？')) {
+                                        deleteBill(bill.id);
+                                        setUndoCount(1);
+                                        setUndoToast(true);
+                                        setTimeout(() => setUndoToast(false), 3500);
+                                      }
+                                    }}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    删除
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </PageLayout>
@@ -637,20 +867,31 @@ export default function BillsPage() {
             </div>
           )}
 
-          {form.amount && form.participantIds.length > 0 && !validationError && (
-            <div className="p-3 bg-emerald-50 rounded-xl">
-              <div className="text-xs text-emerald-600 mb-1">分摊预览（合计应等于账单金额）</div>
+          {form.amount && form.participantIds.length > 0 && (
+            <div className={`p-3 rounded-xl ${validationError ? 'bg-amber-50' : 'bg-emerald-50'}`}>
+              <div className={`text-xs mb-1 ${validationError ? 'text-amber-600' : 'text-emerald-600'}`}>
+                分摊预览（合计应等于账单金额）
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {form.participantIds.map((mid) => {
                   const m = memberMap[mid];
                   if (!m) return null;
                   return (
-                    <span key={mid} className="text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                    <span
+                      key={mid}
+                      className={`text-xs px-2 py-0.5 rounded-full ${
+                        validationError ? 'text-amber-700 bg-amber-100' : 'text-emerald-700 bg-emerald-100'
+                      }`}
+                    >
                       {m.name}: {formatMoney(previewShares[mid] || 0)}
                     </span>
                   );
                 })}
-                <span className="text-xs text-emerald-700 font-medium bg-emerald-200 px-2 py-0.5 rounded-full">
+                <span
+                  className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                    validationError ? 'text-amber-700 bg-amber-200' : 'text-emerald-700 bg-emerald-200'
+                  }`}
+                >
                   合计: {formatMoney(Object.values(previewShares).reduce((s, v) => s + v, 0))}
                 </span>
               </div>
@@ -670,6 +911,51 @@ export default function BillsPage() {
               className="flex-1 py-3 rounded-xl bg-primary-500 text-white font-medium shadow-lg shadow-primary-500/30 active:scale-95 disabled:opacity-50 disabled:active:scale-100 transition-all"
             >
               {editingBill ? '保存修改' : '保存'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={showBatchModal} onClose={() => setShowBatchModal(false)} title="批量修改分类">
+        <div className="p-5 space-y-4">
+          <div className="text-sm text-gray-600">
+            已选择 <span className="font-bold text-gray-800">{selectedIds.size}</span> 笔账单，统一改为：
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {(Object.keys(CATEGORY_CONFIG) as BillCategory[]).map((cat) => {
+              const cfg = CATEGORY_CONFIG[cat];
+              const Icon = cfg.icon;
+              const active = batchCategory === cat;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setBatchCategory(cat)}
+                  className={`flex flex-col items-center gap-1 py-3 rounded-xl transition-all ${
+                    active
+                      ? cfg.bgColor + ' ring-2 ring-offset-1 ring-current ' + cfg.color
+                      : 'bg-gray-50 hover:bg-gray-100'
+                  }`}
+                >
+                  <Icon className={`w-5 h-5 ${active ? cfg.color : 'text-gray-500'}`} />
+                  <span className={`text-xs ${active ? cfg.color + ' font-medium' : 'text-gray-500'}`}>
+                    {cfg.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="pt-2 flex gap-3">
+            <button
+              onClick={() => setShowBatchModal(false)}
+              className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-medium active:bg-gray-50 transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleBatchChangeCategory}
+              className="flex-1 py-3 rounded-xl bg-primary-500 text-white font-medium shadow-lg shadow-primary-500/30 active:scale-95 transition-all"
+            >
+              确认修改
             </button>
           </div>
         </div>

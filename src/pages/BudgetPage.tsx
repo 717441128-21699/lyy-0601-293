@@ -1,16 +1,37 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, AlertTriangle, Check, TrendingUp, Target, ArrowRight, Edit3 } from 'lucide-react';
+import {
+  Wallet,
+  AlertTriangle,
+  Check,
+  TrendingUp,
+  Target,
+  ArrowRight,
+  Edit3,
+  Calendar as CalendarIcon,
+  BarChart3,
+  Flame,
+} from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
 import EmptyState from '@/components/EmptyState';
 import Modal from '@/components/Modal';
-import { formatMoney } from '@/utils/id';
+import { formatMoney, formatDateCN, round2 } from '@/utils/id';
+import { CATEGORY_CONFIG } from '@/constants';
+
+interface DailyStat {
+  date: string;
+  amount: number;
+  count: number;
+  remainingAfter: number;
+  overspent: boolean;
+  categories: Record<string, number>;
+}
 
 export default function BudgetPage() {
   const navigate = useNavigate();
-  const { currentTrip, tripMembers, totalExpense } = useCurrentTrip();
+  const { currentTrip, tripMembers, totalExpense, tripBills } = useCurrentTrip();
   const { updateTrip } = useStore();
   const [showModal, setShowModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState('');
@@ -22,6 +43,39 @@ export default function BudgetPage() {
   const remaining = totalBudget - totalExpense;
   const progress = totalBudget > 0 ? Math.min((totalExpense / totalBudget) * 100, 100) : 0;
   const overPercent = totalBudget > 0 && overspent ? ((totalExpense - totalBudget) / totalBudget) * 100 : 0;
+
+  const dailyStats = useMemo((): DailyStat[] => {
+    const byDate: Record<string, DailyStat> = {};
+    tripBills.forEach((b) => {
+      if (!byDate[b.date]) {
+        byDate[b.date] = {
+          date: b.date,
+          amount: 0,
+          count: 0,
+          remainingAfter: 0,
+          overspent: false,
+          categories: {},
+        };
+      }
+      byDate[b.date].amount = round2(byDate[b.date].amount + b.amount);
+      byDate[b.date].count += 1;
+      byDate[b.date].categories[b.category] =
+        (byDate[b.date].categories[b.category] || 0) + b.amount;
+    });
+    const dates = Object.keys(byDate).sort((a, b) => a.localeCompare(b));
+    let cumSpent = 0;
+    dates.forEach((d) => {
+      cumSpent = round2(cumSpent + byDate[d].amount);
+      byDate[d].remainingAfter = round2(totalBudget - cumSpent);
+      byDate[d].overspent = totalBudget > 0 && byDate[d].remainingAfter < 0;
+    });
+    return dates.map((d) => byDate[d]);
+  }, [tripBills, totalBudget]);
+
+  const maxDailyAmount = useMemo(() => {
+    if (dailyStats.length === 0) return 0;
+    return Math.max(...dailyStats.map((s) => s.amount));
+  }, [dailyStats]);
 
   const handleOpenModal = () => {
     setBudgetInput(String(currentTrip?.budgetPerPerson || ''));
@@ -152,7 +206,7 @@ export default function BudgetPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-5">
           <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
             <Wallet className="w-4 h-4 text-primary-500" />
             人均预算详情
@@ -192,6 +246,74 @@ export default function BudgetPage() {
             </div>
           </div>
         </div>
+
+        {dailyStats.length > 0 && (
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-primary-500" />
+              每日预算消耗趋势
+            </h3>
+
+            <div className="space-y-3">
+              {dailyStats.map((stat) => (
+                <div
+                  key={stat.date}
+                  className={`p-3 rounded-xl transition-all ${
+                    stat.overspent ? 'bg-red-50 border border-red-100' : 'bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <CalendarIcon className={`w-3.5 h-3.5 ${stat.overspent ? 'text-red-500' : 'text-gray-400'}`} />
+                    <span className={`text-sm font-medium ${stat.overspent ? 'text-red-700' : 'text-gray-700'}`}>
+                      {formatDateCN(stat.date)}
+                    </span>
+                    {stat.overspent && (
+                      <span className="flex items-center gap-0.5 text-[10px] text-red-600 bg-red-100 px-1.5 py-0.5 rounded-full">
+                        <Flame className="w-3 h-3" />
+                        超支日
+                      </span>
+                    )}
+                    <span className="ml-auto text-xs text-gray-500">{stat.count}笔</span>
+                    <span className={`text-sm font-bold ${stat.overspent ? 'text-red-600' : 'text-gray-800'}`}>
+                      {formatMoney(stat.amount)}
+                    </span>
+                  </div>
+
+                  <div className="h-2.5 bg-white rounded-full overflow-hidden mb-2">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        stat.overspent ? 'bg-red-400' : 'bg-primary-500'
+                      }`}
+                      style={{
+                        width: `${maxDailyAmount > 0 ? Math.min((stat.amount / maxDailyAmount) * 100, 100) : 0}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px]">
+                    <div className="flex gap-1.5 flex-wrap">
+                      {Object.entries(stat.categories).map(([cat, amt]) => {
+                        const cfg = CATEGORY_CONFIG[cat as keyof typeof CATEGORY_CONFIG];
+                        if (!cfg) return null;
+                        return (
+                          <span
+                            key={cat}
+                            className={`px-1.5 py-0.5 rounded ${cfg.bgColor} ${cfg.color} text-[10px]`}
+                          >
+                            {cfg.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <span className={stat.overspent ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                      当日剩余: {formatMoney(stat.remainingAfter)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {budgetPerPerson === 0 && (
           <div className="mt-4 p-4 bg-primary-50 border border-primary-100 rounded-2xl flex items-start gap-3">
