@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Receipt, Trash2, ArrowRight, Calendar as CalendarIcon, Check } from 'lucide-react';
+import { Plus, Receipt, Trash2, ArrowRight, Calendar as CalendarIcon, Check, Edit3, AlertCircle } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
@@ -8,42 +8,48 @@ import EmptyState from '@/components/EmptyState';
 import Modal from '@/components/Modal';
 import CategoryIcon from '@/components/CategoryIcon';
 import MemberAvatar from '@/components/MemberAvatar';
-import { BillCategory, SplitType, BillParticipant } from '@/types';
+import { Bill, BillCategory, SplitType, BillParticipant } from '@/types';
 import { CATEGORY_CONFIG, SPLIT_TYPE_CONFIG } from '@/constants';
 import { formatMoney, formatDateCN, todayStr, generateId, round2 } from '@/utils/id';
-import { calculateBillShares } from '@/utils/calculation';
+import { calculateBillShares, validateSplit } from '@/utils/calculation';
+
+interface FormState {
+  category: BillCategory;
+  amount: string;
+  payerId: string;
+  splitType: SplitType;
+  note: string;
+  date: string;
+  participantIds: string[];
+  weights: Record<string, string>;
+  fixedAmounts: Record<string, string>;
+}
+
+const emptyForm: FormState = {
+  category: 'food',
+  amount: '',
+  payerId: '',
+  splitType: 'equal',
+  note: '',
+  date: todayStr(),
+  participantIds: [],
+  weights: {},
+  fixedAmounts: {},
+};
 
 export default function BillsPage() {
   const navigate = useNavigate();
   const { currentTrip, tripMembers, tripBills, memberMap } = useCurrentTrip();
-  const { addBill, deleteBill } = useStore();
+  const { addBill, updateBill, deleteBill } = useStore();
   const [showModal, setShowModal] = useState(false);
+  const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [dateFilter, setDateFilter] = useState<string>('');
-  const [form, setForm] = useState<{
-    category: BillCategory;
-    amount: string;
-    payerId: string;
-    splitType: SplitType;
-    note: string;
-    date: string;
-    participantIds: string[];
-    ratios: Record<string, string>;
-    fixedAmounts: Record<string, string>;
-  }>({
-    category: 'food',
-    amount: '',
-    payerId: '',
-    splitType: 'equal',
-    note: '',
-    date: todayStr(),
-    participantIds: [],
-    ratios: {},
-    fixedAmounts: {},
-  });
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [validationError, setValidationError] = useState<string>('');
 
   const groupedBills = useMemo(() => {
     const filtered = dateFilter ? tripBills.filter((b) => b.date === dateFilter) : tripBills;
-    const groups: Record<string, typeof tripBills> = {};
+    const groups: Record<string, Bill[]> = {};
     filtered.forEach((bill) => {
       if (!groups[bill.date]) groups[bill.date] = [];
       groups[bill.date].push(bill);
@@ -69,7 +75,7 @@ export default function BillsPage() {
       id: generateId(),
       billId: '',
       memberId: mid,
-      ratio: Number(form.ratios[mid]) || 0,
+      ratio: Number(form.weights[mid]) || 0,
       fixedAmount: Number(form.fixedAmounts[mid]) || 0,
     }));
     return calculateBillShares({
@@ -86,16 +92,44 @@ export default function BillsPage() {
     });
   }, [form]);
 
-  const handleOpenModal = () => {
+  const handleOpenAddModal = () => {
+    setEditingBill(null);
+    const defaultForm: FormState = { ...emptyForm, date: todayStr() };
     if (tripMembers.length > 0) {
-      setForm((f) => ({
-        ...f,
-        payerId: tripMembers[0].id,
-        participantIds: tripMembers.map((m) => m.id),
-        ratios: Object.fromEntries(tripMembers.map((m) => [m.id, ''])),
-        fixedAmounts: Object.fromEntries(tripMembers.map((m) => [m.id, ''])),
-      }));
+      defaultForm.payerId = tripMembers[0].id;
+      defaultForm.participantIds = tripMembers.map((m) => m.id);
+      defaultForm.weights = Object.fromEntries(tripMembers.map((m) => [m.id, '1']));
+      defaultForm.fixedAmounts = Object.fromEntries(tripMembers.map((m) => [m.id, '']));
     }
+    setForm(defaultForm);
+    setValidationError('');
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (bill: Bill) => {
+    setEditingBill(bill);
+    const weights: Record<string, string> = {};
+    const fixedAmounts: Record<string, string> = {};
+    tripMembers.forEach((m) => {
+      weights[m.id] = '';
+      fixedAmounts[m.id] = '';
+    });
+    bill.participants.forEach((p) => {
+      weights[p.memberId] = p.ratio > 0 ? String(p.ratio) : '1';
+      fixedAmounts[p.memberId] = p.fixedAmount > 0 ? String(p.fixedAmount) : '';
+    });
+    setForm({
+      category: bill.category,
+      amount: String(bill.amount),
+      payerId: bill.payerId,
+      splitType: bill.splitType,
+      note: bill.note,
+      date: bill.date,
+      participantIds: bill.participants.map((p) => p.memberId),
+      weights,
+      fixedAmounts,
+    });
+    setValidationError('');
     setShowModal(true);
   };
 
@@ -105,54 +139,80 @@ export default function BillsPage() {
       const newIds = exists
         ? f.participantIds.filter((id) => id !== memberId)
         : [...f.participantIds, memberId];
-      return { ...f, participantIds: newIds };
+      const newWeights = { ...f.weights };
+      const newFixed = { ...f.fixedAmounts };
+      if (!exists) {
+        if (!newWeights[memberId]) newWeights[memberId] = '1';
+      }
+      return { ...f, participantIds: newIds, weights: newWeights, fixedAmounts: newFixed };
     });
   };
 
-  const handleAddBill = () => {
+  const handleSaveBill = () => {
     if (!currentTrip || !form.amount || !form.payerId || form.participantIds.length === 0) return;
-    const amount = Number(form.amount);
+    const amount = round2(Number(form.amount));
+
+    const participantsForValidation = form.participantIds.map((mid) => ({
+      memberId: mid,
+      ratio: Number(form.weights[mid]) || 0,
+      fixedAmount: Number(form.fixedAmounts[mid]) || 0,
+      weight: Number(form.weights[mid]) || 0,
+    }));
+
+    const validation = validateSplit(form.splitType, amount, participantsForValidation);
+    if (!validation.valid) {
+      setValidationError(validation.message || '分摊金额校验失败');
+      return;
+    }
+    setValidationError('');
+
     const participants: BillParticipant[] = form.participantIds.map((mid) => {
       let ratio = 0;
       let fixedAmount = 0;
       if (form.splitType === 'equal') {
         ratio = 1 / form.participantIds.length;
       } else if (form.splitType === 'ratio') {
-        ratio = Number(form.ratios[mid]) || 0;
+        ratio = Number(form.weights[mid]) || 1;
       } else {
         fixedAmount = Number(form.fixedAmounts[mid]) || 0;
       }
       return {
-        id: generateId(),
-        billId: '',
+        id: editingBill
+          ? editingBill.participants.find((p) => p.memberId === mid)?.id || generateId()
+          : generateId(),
+        billId: editingBill?.id || '',
         memberId: mid,
         ratio: round2(ratio),
         fixedAmount: round2(fixedAmount),
       };
     });
 
-    addBill({
-      tripId: currentTrip.id,
-      category: form.category,
-      amount,
-      payerId: form.payerId,
-      splitType: form.splitType,
-      note: form.note.trim(),
-      date: form.date,
-      participants,
-    });
-    setForm({
-      category: 'food',
-      amount: '',
-      payerId: tripMembers[0]?.id || '',
-      splitType: 'equal',
-      note: '',
-      date: todayStr(),
-      participantIds: tripMembers.map((m) => m.id),
-      ratios: {},
-      fixedAmounts: {},
-    });
+    if (editingBill) {
+      updateBill(editingBill.id, {
+        category: form.category,
+        amount,
+        payerId: form.payerId,
+        splitType: form.splitType,
+        note: form.note.trim(),
+        date: form.date,
+        participants,
+      });
+    } else {
+      addBill({
+        tripId: currentTrip.id,
+        category: form.category,
+        amount,
+        payerId: form.payerId,
+        splitType: form.splitType,
+        note: form.note.trim(),
+        date: form.date,
+        participants,
+      });
+    }
+
     setShowModal(false);
+    setEditingBill(null);
+    setForm(emptyForm);
   };
 
   if (!currentTrip) {
@@ -182,7 +242,7 @@ export default function BillsPage() {
         title="账单记录"
         rightAction={
           <button
-            onClick={handleOpenModal}
+            onClick={handleOpenAddModal}
             disabled={tripMembers.length === 0}
             className="w-10 h-10 rounded-full bg-primary-500 text-white flex items-center justify-center shadow-lg shadow-primary-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
           >
@@ -262,7 +322,7 @@ export default function BillsPage() {
                 </button>
               ) : (
                 <button
-                  onClick={handleOpenModal}
+                  onClick={handleOpenAddModal}
                   className="px-6 py-3 bg-primary-500 text-white rounded-full font-medium shadow-lg shadow-primary-500/30 active:scale-95 transition-all flex items-center gap-2"
                 >
                   <Plus className="w-5 h-5" />
@@ -337,17 +397,27 @@ export default function BillsPage() {
                                 );
                               })}
                             </div>
+                            <div className="mt-3 pt-2 border-t border-gray-50 flex gap-2 justify-end">
+                              <button
+                                onClick={() => handleOpenEditModal(bill)}
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-600 bg-primary-50 hover:bg-primary-100 transition-colors"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                编辑
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm('确定删除这笔账单吗？')) {
+                                    deleteBill(bill.id);
+                                  }
+                                }}
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                删除
+                              </button>
+                            </div>
                           </div>
-                          <button
-                            onClick={() => {
-                              if (confirm('确定删除这笔账单吗？')) {
-                                deleteBill(bill.id);
-                              }
-                            }}
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
                         </div>
                       </div>
                     );
@@ -359,8 +429,8 @@ export default function BillsPage() {
         )}
       </PageLayout>
 
-      <Modal open={showModal} onClose={() => setShowModal(false)} title="记一笔">
-        <div className="p-5 space-y-5">
+      <Modal open={showModal} onClose={() => setShowModal(false)} title={editingBill ? '编辑账单' : '记一笔'}>
+        <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">消费分类</label>
             <div className="grid grid-cols-5 gap-2">
@@ -467,7 +537,7 @@ export default function BillsPage() {
                         : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
                     }`}
                   >
-                    <div className={`text-sm font-medium ${active ? '' : ''}`}>{cfg.label}</div>
+                    <div className="text-sm font-medium">{cfg.label}</div>
                   </button>
                 );
               })}
@@ -510,27 +580,27 @@ export default function BillsPage() {
                     </button>
                     {checked && form.splitType === 'ratio' && (
                       <div className="mt-2 ml-10 flex items-center gap-2">
-                        <span className="text-xs text-gray-500">比例</span>
+                        <span className="text-xs text-gray-500 w-10">权重</span>
                         <input
                           type="number"
                           min="0"
-                          max="1"
-                          step="0.01"
-                          value={form.ratios[m.id]}
+                          step="1"
+                          value={form.weights[m.id]}
                           onChange={(e) =>
                             setForm({
                               ...form,
-                              ratios: { ...form.ratios, [m.id]: e.target.value },
+                              weights: { ...form.weights, [m.id]: e.target.value },
                             })
                           }
-                          placeholder="0.5"
+                          placeholder="1"
                           className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-primary-500"
                         />
+                        <span className="text-xs text-gray-400">按占比分摊</span>
                       </div>
                     )}
                     {checked && form.splitType === 'fixed' && (
                       <div className="mt-2 ml-10 flex items-center gap-2">
-                        <span className="text-xs text-gray-500">金额</span>
+                        <span className="text-xs text-gray-500 w-10">金额</span>
                         <input
                           type="number"
                           min="0"
@@ -545,6 +615,7 @@ export default function BillsPage() {
                           placeholder="0.00"
                           className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-primary-500"
                         />
+                        <span className="text-xs text-gray-400">元</span>
                       </div>
                     )}
                   </div>
@@ -552,6 +623,39 @@ export default function BillsPage() {
               })}
             </div>
           </div>
+
+          {form.splitType === 'ratio' && form.participantIds.length > 0 && (
+            <div className="p-3 bg-blue-50 rounded-xl text-xs text-blue-700">
+              💡 按权重分摊：例如3人分别填1、2、3，则按1/6、2/6、3/6的比例自动计算
+            </div>
+          )}
+
+          {validationError && (
+            <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <span className="text-sm text-red-600">{validationError}</span>
+            </div>
+          )}
+
+          {form.amount && form.participantIds.length > 0 && !validationError && (
+            <div className="p-3 bg-emerald-50 rounded-xl">
+              <div className="text-xs text-emerald-600 mb-1">分摊预览（合计应等于账单金额）</div>
+              <div className="flex flex-wrap gap-1.5">
+                {form.participantIds.map((mid) => {
+                  const m = memberMap[mid];
+                  if (!m) return null;
+                  return (
+                    <span key={mid} className="text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      {m.name}: {formatMoney(previewShares[mid] || 0)}
+                    </span>
+                  );
+                })}
+                <span className="text-xs text-emerald-700 font-medium bg-emerald-200 px-2 py-0.5 rounded-full">
+                  合计: {formatMoney(Object.values(previewShares).reduce((s, v) => s + v, 0))}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className="pt-2 flex gap-3">
             <button
@@ -561,11 +665,11 @@ export default function BillsPage() {
               取消
             </button>
             <button
-              onClick={handleAddBill}
-              disabled={!form.amount || !form.payerId || form.participantIds.length === 0}
+              onClick={handleSaveBill}
+              disabled={!form.amount || !form.payerId || form.participantIds.length === 0 || !!validationError}
               className="flex-1 py-3 rounded-xl bg-primary-500 text-white font-medium shadow-lg shadow-primary-500/30 active:scale-95 disabled:opacity-50 disabled:active:scale-100 transition-all"
             >
-              保存
+              {editingBill ? '保存修改' : '保存'}
             </button>
           </div>
         </div>

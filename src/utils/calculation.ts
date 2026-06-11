@@ -1,24 +1,90 @@
 import { Bill, Member, MemberBalance, Transfer, AdvancePayment, BillCategory, CategoryStat } from '@/types';
 import { round2 } from './id';
 
+export interface SplitValidationResult {
+  valid: boolean;
+  total: number;
+  diff: number;
+  message?: string;
+}
+
+export function validateSplit(
+  splitType: 'equal' | 'ratio' | 'fixed',
+  amount: number,
+  participants: { memberId: string; ratio: number; fixedAmount: number; weight?: number }[]
+): SplitValidationResult {
+  if (participants.length === 0) {
+    return { valid: false, total: 0, diff: amount, message: '请选择参与人' };
+  }
+
+  if (splitType === 'equal') {
+    return { valid: true, total: amount, diff: 0 };
+  }
+
+  if (splitType === 'ratio') {
+    const weights = participants.map((p) => p.weight ?? p.ratio ?? 1);
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
+    if (totalWeight <= 0) {
+      return { valid: false, total: 0, diff: amount, message: '权重总和必须大于0' };
+    }
+    return { valid: true, total: amount, diff: 0 };
+  }
+
+  if (splitType === 'fixed') {
+    const total = participants.reduce((s, p) => s + (p.fixedAmount || 0), 0);
+    const diff = round2(amount - total);
+    if (Math.abs(diff) > 0.01) {
+      return {
+        valid: false,
+        total: round2(total),
+        diff,
+        message: `分摊金额合计${round2(total)}元，与账单金额${round2(amount)}元相差${Math.abs(diff)}元`,
+      };
+    }
+    return { valid: true, total: round2(total), diff: 0 };
+  }
+
+  return { valid: true, total: amount, diff: 0 };
+}
+
 export function calculateBillShares(bill: Bill): Record<string, number> {
   const shares: Record<string, number> = {};
+  const count = bill.participants.length;
+  if (count === 0) return shares;
+  const amount = round2(bill.amount);
 
   if (bill.splitType === 'equal') {
-    const count = bill.participants.length;
-    if (count === 0) return shares;
-    const perPerson = round2(bill.amount / count);
-    let diff = round2(bill.amount - perPerson * count);
+    const perPerson = round2(amount / count);
+    const diff = round2(amount - perPerson * count);
     bill.participants.forEach((p, idx) => {
       shares[p.memberId] = idx === 0 ? round2(perPerson + diff) : perPerson;
     });
   } else if (bill.splitType === 'ratio') {
-    bill.participants.forEach((p) => {
-      shares[p.memberId] = round2(bill.amount * p.ratio);
-    });
+    const weights = bill.participants.map((p) => p.ratio > 0 ? p.ratio : 1);
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
+    if (totalWeight <= 0) {
+      const perPerson = round2(amount / count);
+      const diff = round2(amount - perPerson * count);
+      bill.participants.forEach((p, idx) => {
+        shares[p.memberId] = idx === 0 ? round2(perPerson + diff) : perPerson;
+      });
+    } else {
+      const rawShares = bill.participants.map((p, idx) => {
+        const w = weights[idx];
+        return round2(amount * (w / totalWeight));
+      });
+      const rawTotal = rawShares.reduce((s, v) => s + v, 0);
+      const diff = round2(amount - rawTotal);
+      bill.participants.forEach((p, idx) => {
+        shares[p.memberId] = idx === 0 ? round2(rawShares[idx] + diff) : rawShares[idx];
+      });
+    }
   } else if (bill.splitType === 'fixed') {
-    bill.participants.forEach((p) => {
-      shares[p.memberId] = p.fixedAmount;
+    const rawShares = bill.participants.map((p) => round2(p.fixedAmount || 0));
+    const rawTotal = rawShares.reduce((s, v) => s + v, 0);
+    const diff = round2(amount - rawTotal);
+    bill.participants.forEach((p, idx) => {
+      shares[p.memberId] = idx === 0 ? round2(rawShares[idx] + diff) : rawShares[idx];
     });
   }
 

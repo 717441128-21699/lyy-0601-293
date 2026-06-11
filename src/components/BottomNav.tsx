@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
-import { Map, Receipt, Users, ArrowLeftRight, PieChart, Settings } from 'lucide-react';
+import { Map, Receipt, Users, Wallet, ArrowLeftRight, PieChart, Settings } from 'lucide-react';
 
 const navItems = [
   { to: '/trips', label: '行程', icon: Map },
   { to: '/bills', label: '账单', icon: Receipt },
   { to: '/members', label: '成员', icon: Users },
+  { to: '/budget', label: '预算', icon: Wallet },
   { to: '/settlement', label: '结算', icon: ArrowLeftRight },
   { to: '/statistics', label: '统计', icon: PieChart },
   { to: '/export', label: '导出', icon: Settings },
@@ -31,13 +32,13 @@ export default function BottomNav() {
               {({ isActive }) => (
                 <>
                   <Icon
-                    className={`w-5 h-5 mb-0.5 transition-transform duration-200 ${
+                    className={`w-[18px] h-[18px] mb-0.5 transition-transform duration-200 ${
                       isActive ? 'scale-110' : ''
                     }`}
                     strokeWidth={isActive ? 2.5 : 2}
                   />
                   <span
-                    className={`text-xs ${isActive ? 'font-medium' : ''}`}
+                    className={`text-[10px] ${isActive ? 'font-medium' : ''}`}
                   >
                     {item.label}
                   </span>
