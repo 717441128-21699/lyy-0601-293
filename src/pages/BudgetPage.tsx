@@ -11,14 +11,19 @@ import {
   Calendar as CalendarIcon,
   BarChart3,
   Flame,
+  PieChart as PieChartIcon,
+  ExternalLink,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
 import EmptyState from '@/components/EmptyState';
 import Modal from '@/components/Modal';
+import CategoryIcon from '@/components/CategoryIcon';
+import MemberAvatar from '@/components/MemberAvatar';
 import { formatMoney, formatDateCN, round2 } from '@/utils/id';
-import { CATEGORY_CONFIG } from '@/constants';
+import { CATEGORY_CONFIG, SPLIT_TYPE_CONFIG, CATEGORY_CHART_COLORS } from '@/constants';
+import { calculateBillShares } from '@/utils/calculation';
 
 interface DailyStat {
   date: string;
@@ -31,10 +36,11 @@ interface DailyStat {
 
 export default function BudgetPage() {
   const navigate = useNavigate();
-  const { currentTrip, tripMembers, totalExpense, tripBills } = useCurrentTrip();
+  const { currentTrip, tripMembers, totalExpense, tripBills, memberMap } = useCurrentTrip();
   const { updateTrip } = useStore();
   const [showModal, setShowModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState('');
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const budgetPerPerson = currentTrip?.budgetPerPerson || 0;
   const totalBudget = budgetPerPerson * tripMembers.length;
@@ -76,6 +82,29 @@ export default function BudgetPage() {
     if (dailyStats.length === 0) return 0;
     return Math.max(...dailyStats.map((s) => s.amount));
   }, [dailyStats]);
+
+  const selectedDateBills = useMemo(() => {
+    if (!selectedDate) return [];
+    return tripBills.filter((b) => b.date === selectedDate);
+  }, [tripBills, selectedDate]);
+
+  const selectedDateCategories = useMemo(() => {
+    const cats: Record<string, number> = {};
+    selectedDateBills.forEach((b) => {
+      cats[b.category] = (cats[b.category] || 0) + b.amount;
+    });
+    return Object.entries(cats)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, amt]) => ({ category: cat, amount: amt }));
+  }, [selectedDateBills]);
+
+  const selectedDateTotal = selectedDateBills.reduce((s, b) => s + b.amount, 0);
+
+  const goToStatisticsWithDate = () => {
+    if (!selectedDate) return;
+    navigate(`/statistics?date=${selectedDate}`);
+    setSelectedDate(null);
+  };
 
   const handleOpenModal = () => {
     setBudgetInput(String(currentTrip?.budgetPerPerson || ''));
@@ -258,8 +287,9 @@ export default function BudgetPage() {
               {dailyStats.map((stat) => (
                 <div
                   key={stat.date}
-                  className={`p-3 rounded-xl transition-all ${
-                    stat.overspent ? 'bg-red-50 border border-red-100' : 'bg-gray-50'
+                  onClick={() => setSelectedDate(stat.date)}
+                  className={`p-3 rounded-xl transition-all cursor-pointer active:scale-[0.98] ${
+                    stat.overspent ? 'bg-red-50 border border-red-100' : 'bg-gray-50 hover:bg-gray-100'
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-2">
@@ -369,6 +399,134 @@ export default function BudgetPage() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={selectedDate !== null}
+        onClose={() => setSelectedDate(null)}
+        title={selectedDate ? formatDateCN(selectedDate) : '当日详情'}
+      >
+        {selectedDate && (
+          <div className="p-5 space-y-4">
+            <div className="p-4 bg-gray-50 rounded-xl">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-500">当日消费</span>
+                <span className="text-xl font-bold text-gray-800">
+                  {formatMoney(selectedDateTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">共 {selectedDateBills.length} 笔</span>
+                <button
+                  onClick={goToStatisticsWithDate}
+                  className="flex items-center gap-1 text-primary-600 font-medium"
+                >
+                  查看统计页对应数据
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+
+            {selectedDateCategories.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                  <PieChartIcon className="w-4 h-4 text-primary-500" />
+                  当日分类占比
+                </h4>
+                <div className="space-y-3">
+                  {selectedDateCategories.map((item) => {
+                    const cfg = CATEGORY_CONFIG[item.category as keyof typeof CATEGORY_CONFIG];
+                    const percent = selectedDateTotal > 0 ? (item.amount / selectedDateTotal) * 100 : 0;
+                    return (
+                      <div key={item.category}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="w-3 h-3 rounded-full"
+                              style={{ backgroundColor: CATEGORY_CHART_COLORS[item.category as keyof typeof CATEGORY_CHART_COLORS] }}
+                            />
+                            <span className="text-sm text-gray-700">{cfg.label}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-sm font-semibold text-gray-800">
+                              {formatMoney(item.amount)}
+                            </span>
+                            <span className="text-xs text-gray-400 ml-2">{percent.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{
+                              width: `${percent}%`,
+                              backgroundColor: CATEGORY_CHART_COLORS[item.category as keyof typeof CATEGORY_CHART_COLORS],
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                <CalendarIcon className="w-4 h-4 text-primary-500" />
+                当日账单明细
+              </h4>
+              <div className="space-y-3 max-h-80 overflow-y-auto">
+                {selectedDateBills.map((bill) => {
+                  const payer = memberMap[bill.payerId];
+                  const shares = calculateBillShares(bill);
+                  const cfg = CATEGORY_CONFIG[bill.category];
+                  return (
+                    <div key={bill.id} className="bg-white rounded-xl p-3 border border-gray-100">
+                      <div className="flex items-start gap-2">
+                        <CategoryIcon category={bill.category} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between">
+                            <div className="font-medium text-gray-800 text-sm">
+                              {bill.note || cfg.label}
+                            </div>
+                            <div className="font-bold text-gray-800 text-sm ml-2">
+                              {formatMoney(bill.amount)}
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-500 mt-0.5">
+                            {payer?.name} 支付 · {SPLIT_TYPE_CONFIG[bill.splitType].label}
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {bill.participants.map((p) => {
+                              const m = memberMap[p.memberId];
+                              if (!m) return null;
+                              return (
+                                <span
+                                  key={p.id}
+                                  className="flex items-center gap-1 text-[10px] text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded-full"
+                                >
+                                  <MemberAvatar name={m.name} color={m.color} size="xs" />
+                                  {m.name} {formatMoney(shares[m.id] || 0)}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setSelectedDate(null)}
+              className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 font-medium active:bg-gray-50 transition-colors"
+            >
+              关闭
+            </button>
+          </div>
+        )}
       </Modal>
     </>
   );

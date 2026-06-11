@@ -20,7 +20,7 @@ import PageLayout from '@/components/PageLayout';
 import EmptyState from '@/components/EmptyState';
 import MemberAvatar from '@/components/MemberAvatar';
 import Modal from '@/components/Modal';
-import { formatMoney, formatDateCN } from '@/utils/id';
+import { formatMoney, formatDateCN, timeAgo } from '@/utils/id';
 import type { Settlement, Transfer } from '@/types';
 
 interface TransferWithSettlement extends Transfer {
@@ -266,40 +266,52 @@ export default function SettlementPage() {
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <div
-                        className={`p-2 rounded-lg text-xs ${
+                        className={`p-2.5 rounded-lg text-xs ${
                           t.fromConfirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-50 text-gray-400'
                         }`}
                       >
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 mb-0.5">
                           {t.fromConfirmed ? (
                             <UserCheck className="w-3.5 h-3.5" />
                           ) : (
                             <Clock className="w-3.5 h-3.5" />
                           )}
                           <span className="font-medium">{from.name}</span>
+                          {t.fromConfirmed ? (
+                            <span className="ml-auto text-[10px] text-emerald-600 font-medium">已确认</span>
+                          ) : (
+                            <span className="ml-auto text-[10px] text-gray-400">待确认</span>
+                          )}
                         </div>
                         {t.fromConfirmed && t.settlement?.fromConfirmed && (
-                          <div className="text-[10px] mt-0.5 opacity-75">
-                            {formatConfirmedAt(t.settlement.fromConfirmed.confirmedAt)}
+                          <div className="text-[10px] opacity-75 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {timeAgo(t.settlement.fromConfirmed.confirmedAt)} · {formatConfirmedAt(t.settlement.fromConfirmed.confirmedAt)}
                           </div>
                         )}
                       </div>
                       <div
-                        className={`p-2 rounded-lg text-xs ${
+                        className={`p-2.5 rounded-lg text-xs ${
                           t.toConfirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-50 text-gray-400'
                         }`}
                       >
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 mb-0.5">
                           {t.toConfirmed ? (
                             <UserCheck className="w-3.5 h-3.5" />
                           ) : (
                             <Clock className="w-3.5 h-3.5" />
                           )}
                           <span className="font-medium">{to.name}</span>
+                          {t.toConfirmed ? (
+                            <span className="ml-auto text-[10px] text-emerald-600 font-medium">已确认</span>
+                          ) : (
+                            <span className="ml-auto text-[10px] text-gray-400">待确认</span>
+                          )}
                         </div>
                         {t.toConfirmed && t.settlement?.toConfirmed && (
-                          <div className="text-[10px] mt-0.5 opacity-75">
-                            {formatConfirmedAt(t.settlement.toConfirmed.confirmedAt)}
+                          <div className="text-[10px] opacity-75 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {timeAgo(t.settlement.toConfirmed.confirmedAt)} · {formatConfirmedAt(t.settlement.toConfirmed.confirmedAt)}
                           </div>
                         )}
                       </div>
@@ -394,8 +406,9 @@ export default function SettlementPage() {
                                 {isFrom ? '（付款方）' : '（收款方）'}
                               </div>
                               {confirmed && confirmInfo && (
-                                <div className="text-xs text-emerald-600 mt-0.5">
-                                  已于 {formatConfirmedAt(confirmInfo.confirmedAt)} 确认
+                                <div className="text-xs text-emerald-600 mt-0.5 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {timeAgo(confirmInfo.confirmedAt)} · {formatConfirmedAt(confirmInfo.confirmedAt)}
                                 </div>
                               )}
                             </div>

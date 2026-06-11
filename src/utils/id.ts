@@ -41,3 +41,19 @@ export function todayStr(): string {
 export function round2(num: number): number {
   return Math.round(num * 100) / 100;
 }
+
+export function timeAgo(isoStr: string): string {
+  const now = new Date().getTime();
+  const then = new Date(isoStr).getTime();
+  const diff = now - then;
+  if (diff < 0) return '刚刚';
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}天前`;
+  const d = new Date(isoStr);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}

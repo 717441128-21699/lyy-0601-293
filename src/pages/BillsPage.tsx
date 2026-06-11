@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -15,7 +15,10 @@ import {
   Tag,
   X,
   Image as ImageIcon,
+  Download,
+  Filter,
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import { useStore } from '@/store/useStore';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
@@ -68,11 +71,16 @@ export default function BillsPage() {
   const [batchCategory, setBatchCategory] = useState<BillCategory>('food');
   const [undoToast, setUndoToast] = useState(false);
   const [undoCount, setUndoCount] = useState(0);
+  const [categoryFilter, setCategoryFilter] = useState<BillCategory | ''>('');
+  const [exporting, setExporting] = useState(false);
+  const batchExportRef = useRef<HTMLDivElement>(null);
 
-  const filteredBills = useMemo(
-    () => (dateFilter ? tripBills.filter((b) => b.date === dateFilter) : tripBills),
-    [tripBills, dateFilter]
-  );
+  const filteredBills = useMemo(() => {
+    let result = tripBills;
+    if (dateFilter) result = result.filter((b) => b.date === dateFilter);
+    if (categoryFilter) result = result.filter((b) => b.category === categoryFilter);
+    return result;
+  }, [tripBills, dateFilter, categoryFilter]);
 
   const groupedBills = useMemo(() => {
     const groups: Record<string, Bill[]> = {};
@@ -180,6 +188,20 @@ export default function BillsPage() {
     }
   };
 
+  const toggleSelectCategory = (cat: BillCategory) => {
+    const catBillIds = filteredBills.filter((b) => b.category === cat).map((b) => b.id);
+    const allSelected = catBillIds.every((id) => selectedIds.has(id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        catBillIds.forEach((id) => next.delete(id));
+      } else {
+        catBillIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
   const exitSelectMode = () => {
     setSelectMode(false);
     setSelectedIds(new Set());
@@ -206,6 +228,30 @@ export default function BillsPage() {
     const ok = undoLastDelete();
     if (ok) {
       setUndoToast(false);
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (selectedIds.size === 0 || !batchExportRef.current) return;
+    setExporting(true);
+    try {
+      const canvas = await html2canvas(batchExportRef.current, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+      });
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${currentTrip?.name || '旅行'}_选中${selectedIds.size}笔账单.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('导出失败，请重试');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -417,41 +463,102 @@ export default function BillsPage() {
               </div>
             )}
             {selectMode && filteredBills.length > 0 && (
-              <div className="px-4 pb-3 flex items-center gap-3 bg-white/80 backdrop-blur">
-                <button
-                  onClick={toggleSelectAll}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-all ${
-                    selectedIds.size === filteredBills.length
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  {selectedIds.size === filteredBills.length ? (
-                    <CheckSquare className="w-4 h-4" />
-                  ) : (
-                    <Square className="w-4 h-4" />
-                  )}
-                  全选
-                </button>
-                <div className="text-sm text-gray-500 flex-1">
-                  合计 <span className="font-bold text-gray-800">{formatMoney(selectedTotal)}</span>
+              <div className="px-4 pb-3 space-y-2 bg-white/80 backdrop-blur">
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+                  <Filter className="w-4 h-4 text-gray-400 shrink-0" />
+                  <button
+                    onClick={() => setCategoryFilter('')}
+                    className={`px-3 py-1 rounded-full text-xs whitespace-nowrap transition-all ${
+                      categoryFilter === ''
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    全部分类
+                  </button>
+                  {allCategories.map((cat) => {
+                    const cfg = CATEGORY_CONFIG[cat];
+                    const active = categoryFilter === cat;
+                    return (
+                      <button
+                        key={cat}
+                        onClick={() => setCategoryFilter(cat)}
+                        className={`px-3 py-1 rounded-full text-xs whitespace-nowrap transition-all ${
+                          active
+                            ? cfg.bgColor + ' ' + cfg.color
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
                 </div>
-                <button
-                  onClick={() => setShowBatchModal(true)}
-                  disabled={selectedIds.size === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-primary-50 text-primary-600 disabled:opacity-50"
-                >
-                  <Tag className="w-4 h-4" />
-                  改分类
-                </button>
-                <button
-                  onClick={handleBatchDelete}
-                  disabled={selectedIds.size === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-red-50 text-red-500 disabled:opacity-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  删除
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={toggleSelectAll}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-all ${
+                      selectedIds.size === filteredBills.length && filteredBills.length > 0
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    {selectedIds.size === filteredBills.length && filteredBills.length > 0 ? (
+                      <CheckSquare className="w-4 h-4" />
+                    ) : (
+                      <Square className="w-4 h-4" />
+                    )}
+                    全选
+                  </button>
+                  {allCategories.map((cat) => {
+                    const cfg = CATEGORY_CONFIG[cat];
+                    const catBills = filteredBills.filter((b) => b.category === cat);
+                    if (catBills.length === 0) return null;
+                    const allCatSelected = catBills.every((b) => selectedIds.has(b.id));
+                    return (
+                      <button
+                        key={cat}
+                        onClick={() => toggleSelectCategory(cat)}
+                        className={`flex items-center gap-1 px-2 py-1.5 rounded-full text-xs transition-all ${
+                          allCatSelected
+                            ? cfg.bgColor + ' ' + cfg.color
+                            : 'bg-gray-50 text-gray-500'
+                        }`}
+                      >
+                        选{cfg.label}
+                      </button>
+                    );
+                  })}
+                  <div className="text-sm text-gray-500 flex-1 text-right">
+                    合计 <span className="font-bold text-gray-800">{formatMoney(selectedTotal)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowBatchModal(true)}
+                    disabled={selectedIds.size === 0}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm bg-primary-50 text-primary-600 disabled:opacity-50"
+                  >
+                    <Tag className="w-4 h-4" />
+                    改分类
+                  </button>
+                  <button
+                    onClick={handleBatchExport}
+                    disabled={selectedIds.size === 0 || exporting}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm bg-blue-50 text-blue-600 disabled:opacity-50"
+                  >
+                    <Download className="w-4 h-4" />
+                    {exporting ? '导出中...' : '导出图片'}
+                  </button>
+                  <button
+                    onClick={handleBatchDelete}
+                    disabled={selectedIds.size === 0}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm bg-red-50 text-red-500 disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    删除
+                  </button>
+                </div>
               </div>
             )}
           </>
@@ -960,6 +1067,115 @@ export default function BillsPage() {
           </div>
         </div>
       </Modal>
+
+      <div className="fixed left-full top-0" style={{ width: 380 }}>
+        <div
+          ref={batchExportRef}
+          className="bg-white p-6"
+          style={{ width: 380, fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif' }}
+        >
+          <div className="text-center mb-5">
+            <h1 className="text-xl font-bold text-gray-900">
+              {currentTrip?.name || '旅行'} · 选中账单
+            </h1>
+            <div className="text-sm text-gray-500 mt-1">
+              共 {selectedIds.size} 笔账单
+            </div>
+            <div className="mt-4 inline-block">
+              <div className="text-xs text-gray-400">合计金额</div>
+              <div className="text-3xl font-bold text-gray-900">
+                {formatMoney(selectedTotal)}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-2 mb-5 flex-wrap justify-center">
+            {tripMembers.map((m) => (
+              <div key={m.id} className="flex items-center gap-1 px-2 py-1 bg-gray-100 rounded-full">
+                <div
+                  className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center font-bold"
+                  style={{ backgroundColor: m.color }}
+                >
+                  {m.name.charAt(0)}
+                </div>
+                <span className="text-xs text-gray-700">{m.name}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mb-2 text-sm font-semibold text-gray-700">📋 消费明细</div>
+          {(() => {
+            const groups: Record<string, Bill[]> = {};
+            selectedBills.forEach((bill) => {
+              if (!groups[bill.date]) groups[bill.date] = [];
+              groups[bill.date].push(bill);
+            });
+            const dates = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+            return dates.map((date) => {
+              const groupBills = groups[date];
+              return (
+                <div key={date} className="mb-5">
+                  <div className="flex items-center gap-2 mb-2 pb-2 border-b border-gray-200">
+                    <span className="text-sm font-semibold text-gray-700">
+                      {formatDateCN(date)}
+                    </span>
+                    <span className="ml-auto text-xs text-gray-400">
+                      {formatMoney(groupBills.reduce((s, b) => s + b.amount, 0))}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {groupBills.map((bill) => {
+                      const payer = memberMap[bill.payerId];
+                      const shares = calculateBillShares(bill);
+                      const cfg = CATEGORY_CONFIG[bill.category];
+                      return (
+                        <div key={bill.id} className="flex gap-3">
+                          <div
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${cfg.bgColor}`}
+                          >
+                            <span className="text-sm">{cfg.label.charAt(0)}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start">
+                              <div className="font-medium text-gray-800 text-sm">
+                                {bill.note || cfg.label}
+                              </div>
+                              <div className="font-bold text-gray-900 text-sm ml-2 shrink-0">
+                                {formatMoney(bill.amount)}
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {payer?.name} 支付 · {SPLIT_TYPE_CONFIG[bill.splitType].label}
+                            </div>
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {bill.participants.map((p) => {
+                                const m = memberMap[p.memberId];
+                                if (!m) return null;
+                                return (
+                                  <span
+                                    key={p.id}
+                                    className="text-xs text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded"
+                                  >
+                                    {m.name} {formatMoney(shares[m.id] || 0)}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            });
+          })()}
+
+          <div className="mt-6 pt-4 border-t border-gray-200 text-center text-xs text-gray-400">
+            由旅行AA记账生成 · {new Date().toLocaleDateString('zh-CN')}
+          </div>
+        </div>
+      </div>
     </>
   );
 }

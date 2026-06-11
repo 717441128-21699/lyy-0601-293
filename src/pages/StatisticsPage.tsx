@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { PieChart, TrendingUp, Users, Receipt, ArrowRight, BarChart3, Calendar as CalendarIcon, Flame } from 'lucide-react';
+import { useMemo, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { PieChart, TrendingUp, Users, Receipt, ArrowRight, BarChart3, Calendar as CalendarIcon, Flame, X } from 'lucide-react';
 import { useCurrentTrip } from '@/hooks/useCurrentTrip';
 import PageLayout from '@/components/PageLayout';
 import EmptyState from '@/components/EmptyState';
@@ -11,7 +11,19 @@ import { formatMoney, formatDateCN, round2 } from '@/utils/id';
 
 export default function StatisticsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { currentTrip, tripBills, tripMembers, totalExpense } = useCurrentTrip();
+
+  const highlightDateRef = useRef<HTMLDivElement>(null);
+
+  const highlightedDate = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('date') || '';
+  }, [location.search]);
+
+  const clearHighlight = () => {
+    navigate('/statistics', { replace: true });
+  };
 
   const categoryStats = calculateCategoryStats(tripBills);
   const perPersonAvg = tripMembers.length > 0 ? totalExpense / tripMembers.length : 0;
@@ -39,6 +51,14 @@ export default function StatisticsPage() {
   }, [tripBills, totalBudget]);
 
   const maxDaily = dailyStats.length > 0 ? Math.max(...dailyStats.map((s) => s.amount)) : 0;
+
+  useEffect(() => {
+    if (highlightedDate && highlightDateRef.current) {
+      setTimeout(() => {
+        highlightDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 300);
+    }
+  }, [highlightedDate]);
 
   if (!currentTrip) {
     return (
@@ -146,16 +166,36 @@ export default function StatisticsPage() {
 
       {dailyStats.length > 0 && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mt-5">
-          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-primary-500" />
-            每日消费明细
-          </h3>
-          <div className="space-y-3">
-            {dailyStats.map((stat) => (
-              <div
-                key={stat.date}
-                className={`p-3 rounded-xl ${stat.overspent ? 'bg-red-50 border border-red-100' : 'bg-gray-50'}`}
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-primary-500" />
+              每日消费明细
+            </h3>
+            {highlightedDate && (
+              <button
+                onClick={clearHighlight}
+                className="flex items-center gap-1 px-2 py-1 rounded-full bg-primary-50 text-primary-600 text-xs"
               >
+                已定位到 {formatDateCN(highlightedDate)}
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <div className="space-y-3">
+            {dailyStats.map((stat) => {
+              const isHighlighted = stat.date === highlightedDate;
+              return (
+                <div
+                  key={stat.date}
+                  ref={isHighlighted ? highlightDateRef : null}
+                  className={`p-3 rounded-xl transition-all ${
+                    isHighlighted
+                      ? 'ring-2 ring-primary-500 ring-offset-2 scale-[1.02] bg-primary-50 border-2 border-primary-200'
+                      : stat.overspent
+                      ? 'bg-red-50 border border-red-100'
+                      : 'bg-gray-50'
+                  }`}
+                >
                 <div className="flex items-center gap-2 mb-2">
                   <CalendarIcon className={`w-3.5 h-3.5 ${stat.overspent ? 'text-red-500' : 'text-gray-400'}`} />
                   <span className={`text-sm font-medium ${stat.overspent ? 'text-red-700' : 'text-gray-700'}`}>
@@ -179,7 +219,8 @@ export default function StatisticsPage() {
                   />
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
